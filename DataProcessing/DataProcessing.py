@@ -7,18 +7,9 @@ def processMovieData():
     spark = SparkSession.builder.appName("MovieRec").getOrCreate()
 
     # Load the movies and ratings data (MovieLens-style, delimited by "::")
-    movies_df = spark.read.csv("data/movies.dat", sep="::", inferSchema=True).toDF("MovieID", "Title", "Genres")
-    ratings_df = spark.read.csv("data/ratings.dat", sep="::", inferSchema=True).toDF("UserID", "MovieID", "Rating", "Timestamp")
-    
+    movies_df = spark.read.csv("data/movies_tream.dat", sep="::", inferSchema=True).toDF("MovieID", "Title", "Genres")
 
-    # Compute rating statistics for each movie
-    movie_stats = ratings_df.groupBy("MovieID") \
-        .agg(avg("Rating").alias("AvgRating"), count("Rating").alias("RatingCount"))
-
-    # Join movies with their rating statistics
-    movies_with_stats = movies_df.join(movie_stats, on="MovieID", how="inner")
-
-    return movies_with_stats
+    return movies_df
 
 def processUserData():
     spark = SparkSession.builder.appName("UserRec").getOrCreate()
@@ -26,4 +17,4 @@ def processUserData():
     ratings_df = spark.read.csv("data/ratings.dat", sep="::", inferSchema=True).toDF("UserID", "MovieID", "Rating", "Timestamp")
     ratings_with_users = ratings_df.join(users_df, "UserID")
 
-    return ratings_with_users
+    return users_df, ratings_with_users

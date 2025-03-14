@@ -1,0 +1,5 @@
+pymilvus
+numpy
+torch
+pandas
+# Add other dependencies your application needs 

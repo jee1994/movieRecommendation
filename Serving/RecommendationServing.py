@@ -3,6 +3,7 @@ import pandas as pd
 import sys
 import os
 import numpy as np
+from pymilvus import utility
 
 # Add the project root to the path to enable imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -10,27 +11,36 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Import from the Embedding package
 from Embedding import UserEmbedding
 from Embedding import MovieEmbedding
+from VectorDataBase.DBHandler import MilvusHandler
 
 def recommend_movies_for_user(user_id, top_k=5):
-    # Load embeddings and data
-    users_pd, user_embeddings = UserEmbedding.embedUserData()
-    movies_pd, final_movie_embeddings = MovieEmbedding.embedProcessedData()
+    # Initialize Milvus handlers
+    user_db_handler = MilvusHandler(host="127.0.0.1", port=19530, collection_name="users_final", dim=768)
+    movie_db_handler = MilvusHandler(host="127.0.0.1", port=19530, collection_name="movies_final", dim=768)
     
-    # Find the user embedding based on user_id
-    user_index = users_pd[users_pd["UserID"] == user_id].index[0]
-    user_embed = user_embeddings[user_index]
+    # Retrieve user data from Milvus
+    users_data = user_db_handler.get_entities(expr=f"UserID == {user_id}")
+    if not users_data or len(users_data) == 0:
+        print(f"User {user_id} not found in Milvus")
+        return []
     
-    # For demonstration, compute cosine similarity (dot product as embeddings are normalized)
-    similarities = torch.matmul(final_movie_embeddings, user_embed)
+    user_embed = users_data[0]['embedding']
     
-    # Get indices of top-k movies
-    top_indices = torch.topk(similarities, top_k).indices
-    recommended_titles = movies_pd.iloc[top_indices.tolist()]["Title"].tolist()
+    # Use Milvus to search for similar movies
+    search_results = movie_db_handler.search(user_embed, top_k)
+    # Get movie details for the results
+    movie_ids = [hit.id for hit in search_results[0]]
+    movies_data = movie_db_handler.get_entities(
+        expr=f"MovieID in {movie_ids}", 
+        output_fields=["Title"]
+    )
     
+    recommended_titles = [movie['Title'] for movie in movies_data]
     return recommended_titles
 
 # Example usage:
 if __name__ == "__main__":
-    user_id_example = 1  # Replace with a valid UserID from your dataset
+    
+    user_id_example = 13  # Replace with a valid UserID from your dataset
     recommendations = recommend_movies_for_user(user_id_example)
     print("Recommended Movies for User", user_id_example, ":", recommendations)
