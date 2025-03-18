@@ -32,15 +32,13 @@ class UserEmbeddingProjector(nn.Module):
         x = self.dropout(x)
         x = self.fc2(x)
         return x
+    
+def embedExistingUser():
+    user_pd, _ = DataProcessing.processUserData().toPandas()
+    embedding_features = featureExtract(user_pd)
+    trainUserData(embedding_features, user_pd)
 
-def embedUserData():
-    # Convert the Spark users DataFrame to Pandas
-    users_pd, user_rating_pd = DataProcessing.processUserData().toPandas()
-    print(f"Loaded {len(users_pd)} users")
-
-    # Load movie data to get movie embeddings
-    movies_pd = DataProcessing.processMovieData().toPandas()
-    print(f"Loaded {len(movies_pd)} movies")
+def featureExtract(users_pd):
     
     # 1. One-hot encoding for Gender
     gender_one_hot = pd.get_dummies(users_pd['Gender'], prefix='Gender')
@@ -54,12 +52,12 @@ def embedUserData():
     age_bracket_one_hot = pd.get_dummies(users_pd['AgeBracket'], prefix='Age')
     print(f"Age bracket features shape: {age_bracket_one_hot.shape}")
     
-    # 3. Occupation embedding (since occupation is already a code)
+        # 3. Occupation embedding (since occupation is already a code)
     # Get the number of unique occupations
-    num_occupations = users_pd['Occupation'].max() + 1  # Assuming 0-based indexing
+    num_occupations = users_pd['Occupation'].max() + 1 
     
     # Create a simple embedding for occupations
-    occupation_embedding_dim = min(10, num_occupations)
+    occupation_embedding_dim = 11
     
     # Create a random embedding matrix for occupations
     np.random.seed(42)  # For reproducibility
@@ -108,9 +106,13 @@ def embedUserData():
     # Normalize the features
     scaler = StandardScaler()
     normalized_features = scaler.fit_transform(combined_features)
+
+    return normalized_features
+
+def trainUserData(embedding_features, users_pd):
     
     # Convert to tensor
-    initial_features = torch.tensor(normalized_features, dtype=torch.float32)
+    initial_features = torch.tensor(embedding_features, dtype=torch.float32)
     
     # Create a mapping from UserID to index
     user_id_to_idx = {user_id: idx for idx, user_id in enumerate(users_pd['UserID'])}
@@ -211,11 +213,6 @@ def embedUserData():
     with torch.no_grad():
         user_embeddings = model(initial_features)
         user_embeddings = nn.functional.normalize(user_embeddings, p=2, dim=1)
-    
-    # Get the final dimension
-    embedding_dim = user_embeddings.shape[1]
-    print(f"Final user embeddings shape: {user_embeddings.shape}")
-    print(f"user_embeddings: {user_embeddings} {users_pd.head()} {embedding_dim}")
 
     return users_pd, user_embeddings
     # user_embeddings: tensor of shape [num_users, 32]
