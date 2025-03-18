@@ -10,6 +10,7 @@ import os
 import shutil
 import argparse
 import pickle
+from pymilvus import connections, Collection, FieldSchema, CollectionSchema, DataType, utility
 from sklearn.preprocessing import StandardScaler
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -220,9 +221,6 @@ def extract_movie_features(movies_pd):
     return bert_embeddings, tokenizer_info
 
 def train_user_embeddings(iteration, movie_collection):
-    """Train user embeddings based on movie embeddings from the specified collection"""
-    print(f"\n=== Training User Embeddings (Iteration {iteration}) ===")
-    print(f"Using movie collection: {movie_collection}")
     
     # Load user data
     users_pd, ratings_pd = DataProcessing.processUserData()
@@ -519,7 +517,7 @@ def train_movie_embeddings(iteration, user_collection):
             similarity = torch.sum(movie_embeddings * user_embeddings, dim=1)
             
             # Scale similarity to rating range (1-5)
-            predicted_ratings = 1 + 4 * (similarity + 1) / 2  # Map from [-1,1] to [1,5]
+            predicted_ratings = 1 + 4 * (similarity + 1) / 2 
             
             # Compute loss
             loss = criterion(predicted_ratings, ratings)
@@ -667,8 +665,8 @@ def main():
     
     # First iteration: train with initial embeddings
     print("\n=== Starting Iteration 0 ===")
-    train_user_embeddings(0, "initial_movies")
-    train_movie_embeddings(0, "users")
+    train_user_embeddings(0, "model_initial_movies")
+    train_movie_embeddings(0, "model_initial_users")
     
     # Subsequent iterations
     for i in range(1, args.iterations):
