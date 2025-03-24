@@ -64,7 +64,7 @@ def create_initial_user_embeddings():
     num_occupations = users_pd['Occupation'].max() + 1  # Assuming 0-based indexing
     
     # Create a simple embedding for occupations
-    occupation_embedding_dim = min(10, num_occupations)
+    occupation_embedding_dim = 11
     
     # Create a random embedding matrix for occupations
     np.random.seed(42)  # For reproducibility
@@ -575,6 +575,7 @@ def main():
     parser.add_argument('--iterations', type=int, default=3, help='Number of refinement iterations')
     parser.add_argument('--skip-initial', action='store_true', help='Skip initial embedding creation')
     args = parser.parse_args()
+    MilvusHandler.drop_all_collections()
     
     create_initial_user_embeddings()
     create_initial_movie_embeddings()

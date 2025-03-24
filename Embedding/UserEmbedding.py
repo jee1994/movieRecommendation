@@ -10,10 +10,14 @@ from tqdm import tqdm
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 import sys
 import os
+import joblib
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from DataProcessing import DataProcessing
 from VectorDataBase.DBHandler import MilvusHandler
+
+# Global scaler that gets fitted once on all training data
+user_feature_scaler = None
 
 def create_user_text(user_row):
     return f"{user_row['Gender']}|{user_row['Age']}|{user_row['Occupation']}|{user_row['Zipcode']}"
@@ -35,21 +39,40 @@ class UserEmbeddingProjector(nn.Module):
     
 def embedExistingUser():
     user_pd, _ = DataProcessing.processUserData().toPandas()
-    embedding_features = featureExtract(user_pd)
+    embedding_features = featureExtract(user_pd, fit_scaler=True)
     trainUserData(embedding_features, user_pd)
 
-def featureExtract(users_pd):
+def featureExtract(users_pd, fit_scaler=True):
+    """
+    Extract and normalize features from user data
+    
+    Args:
+        users_pd: DataFrame with user data (can be multiple users or just one)
+        fit_scaler: Whether to fit a new scaler (True for training, False for inference)
+    
+    Returns:
+        normalized_features: Normalized feature array
+    """
+    global user_feature_scaler
     
     # 1. One-hot encoding for Gender
-    gender_one_hot = pd.get_dummies(users_pd['Gender'], prefix='Gender')
-    print(f"Gender features shape: {gender_one_hot.shape}")
+    print(f"users_pd {users_pd}")
+    gender_one_hot = pd.DataFrame({
+        'Gender_F': (users_pd['Gender'] == 'F').astype(int),
+        'Gender_M': (users_pd['Gender'] == 'M').astype(int)
+    })
+    print(f"Gender features shape: {gender_one_hot}")
     
     # 2. Bracket encoding for Age
     # Define age brackets
     age_brackets = [0, 18, 25, 35, 45, 55, 65, 100]
     bracket_labels = ['0-17', '18-24', '25-34', '35-44', '45-54', '55-64', '65+']
     users_pd['AgeBracket'] = pd.cut(users_pd['Age'], bins=age_brackets, labels=bracket_labels, right=False)
-    age_bracket_one_hot = pd.get_dummies(users_pd['AgeBracket'], prefix='Age')
+
+    age_bracket_one_hot = pd.DataFrame()
+    for label in bracket_labels:
+        age_bracket_one_hot[f'Age_{label}'] = (users_pd['AgeBracket'] == label).astype(int)
+
     print(f"Age bracket features shape: {age_bracket_one_hot.shape}")
     
         # 3. Occupation embedding (since occupation is already a code)
@@ -62,7 +85,7 @@ def featureExtract(users_pd):
     # Create a random embedding matrix for occupations
     np.random.seed(42)  # For reproducibility
     occupation_embedding_matrix = np.random.normal(0, 1, (num_occupations, occupation_embedding_dim))
-    
+    print(f"occupation embedding dims {occupation_embedding_dim}")
     # Get embeddings for each user's occupation
     occupation_embeddings = np.array([
         occupation_embedding_matrix[int(code)] for code in users_pd['Occupation']
@@ -93,7 +116,7 @@ def featureExtract(users_pd):
     # Combine all features
     gender_features = gender_one_hot.values
     age_features = age_bracket_one_hot.values
-    
+    print(gender_features.shape, age_features.shape, occupation_embeddings.shape, zipcode_features_array.shape)
     # Concatenate all features
     combined_features = np.hstack([
         gender_features,
@@ -101,12 +124,82 @@ def featureExtract(users_pd):
         occupation_embeddings,
         zipcode_features_array
     ])
+    # Print shape and statistics of combined features
     print(f"Combined features shape: {combined_features.shape}")
+    print(f"Combined features stats - Min: {np.min(combined_features):.6f}, "
+          f"Max: {np.max(combined_features):.6f}, "
+          f"Mean: {np.mean(combined_features):.6f}, "
+          f"Std: {np.std(combined_features):.6f}")
     
-    # Normalize the features
-    scaler = StandardScaler()
-    normalized_features = scaler.fit_transform(combined_features)
-
+    # Check for constant features
+    feature_stds = np.std(combined_features, axis=0)
+    constant_features = np.where(feature_stds < 1e-10)[0]
+    if len(constant_features) > 0:
+        print(f"Warning: {len(constant_features)} features have constant values (zero variance)")
+        print(f"Constant feature indices: {constant_features[:5]}...")
+    
+    # Handle normalization differently based on context
+    if fit_scaler:
+        # Training mode: Fit a new scaler on all data
+        user_feature_scaler = StandardScaler()
+        normalized_features = user_feature_scaler.fit_transform(combined_features)
+        
+        # Save the scaler for future use
+        joblib.dump(user_feature_scaler, 'models/user_feature_scaler.pkl')
+        
+        print(f"Fitted new scaler on {len(users_pd)} users")
+    else:
+        # Inference mode: Use pre-fitted scaler
+        if user_feature_scaler is None:
+            # Try to load saved scaler
+            try:
+                user_feature_scaler = joblib.load('models/user_feature_scaler.pkl')
+                print("Loaded pre-fitted scaler")
+            except:
+                print("WARNING: No pre-fitted scaler found. Using identity scaling.")
+                # Create dummy scaler that doesn't transform the data
+                user_feature_scaler = StandardScaler()
+                user_feature_scaler.mean_ = np.zeros(combined_features.shape[1])
+                user_feature_scaler.scale_ = np.ones(combined_features.shape[1])
+        
+        # Transform without fitting
+        normalized_features = user_feature_scaler.transform(combined_features)
+    
+    # Print statistics of normalized features
+    print(f"Normalized features shape: {normalized_features.shape}")
+    print(f"Normalized features stats - Min: {np.min(normalized_features):.6f}, "
+          f"Max: {np.max(normalized_features):.6f}, "
+          f"Mean: {np.mean(normalized_features):.6f}, "
+          f"Std: {np.std(normalized_features):.6f}")
+    
+    # Print sample of first row (first 5 values)
+    print("Sample of first row (first 5 values):")
+    print(f"Combined: {combined_features[0, :5]}")
+    print(f"Normalized: {normalized_features[0, :5]}")
+    
+    # Verify normalization worked correctly
+    feature_means = np.mean(normalized_features, axis=0)
+    feature_stds = np.std(normalized_features, axis=0)
+    
+    # Check if means are close to 0 and stds close to 1
+    mean_ok = np.allclose(feature_means, 0, atol=1e-10)
+    std_ok = np.allclose(feature_stds, 1, atol=1e-10)
+    
+    print(f"Normalization check - Means ≈ 0: {mean_ok}, Stds ≈ 1: {std_ok}")
+    
+    # If normalization check failed, print details
+    if not (mean_ok and std_ok):
+        bad_means = np.where(np.abs(feature_means) > 1e-10)[0]
+        bad_stds = np.where(np.abs(feature_stds - 1) > 1e-10)[0]
+        
+        if len(bad_means) > 0:
+            print(f"Features with non-zero means: {bad_means[:5]}...")
+            print(f"Their means: {feature_means[bad_means[:5]]}...")
+        
+        if len(bad_stds) > 0:
+            print(f"Features with non-unit stds: {bad_stds[:5]}...")
+            print(f"Their stds: {feature_stds[bad_stds[:5]]}...")
+            
     return normalized_features
 
 def trainUserData(embedding_features, users_pd):

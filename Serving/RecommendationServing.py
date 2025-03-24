@@ -25,6 +25,7 @@ def recommend_movies_for_user(user_id, top_k=5):
         return []
     
     user_embed = users_data[0]['embedding']
+    print(f"userID: {user_id}")
     print(f"user_embed: {user_embed}")
     return search_movie_with_embedding(user_embed, top_k)
     
@@ -35,7 +36,6 @@ def recommend_movies_for_user_cold_start(new_user_embedding, top_k=5):
 
 def search_movie_with_embedding(user_embedding, top_k=5):
     # Use Milvus to search for similar movies
-    print(f"user_embedding: {user_embedding}")
     movie_db_handler = MilvusHandler(host="127.0.0.1", port=19530, collection_name="movies_final", dim=768)
 
     search_results = movie_db_handler.search(user_embedding, top_k)
@@ -52,14 +52,14 @@ def search_movie_with_embedding(user_embedding, top_k=5):
 # Example usage:
 if __name__ == "__main__":
     # existing user
-    user_id_example = 278
-    recommendations = recommend_movies_for_user(user_id_example)
+    # user_id_example = 543
+    # recommendations = recommend_movies_for_user(user_id_example)
 
     # new user 
-    # user = User(user_id=3829, user_gender="F", user_age=15, user_occupation=7, user_zipcode=48067)
-    # user_embedding_vector = generate_newuser_embeddings("models/user_model_final.pt", user)
-    # print(f"user_embedding_vector: {user_embedding_vector}")
-    # recommendations = recommend_movies_for_user_cold_start(user_embedding_vector)
+    user = User(user_id=1000100, user_gender="F", user_age=7, user_occupation=12, user_zipcode=43920)
+    user_embedding_vector = generate_newuser_embeddings("models/user_model_final.pt", user)
+    # print(f"embedding vector {user_embedding_vector}")
+    recommendations = recommend_movies_for_user_cold_start(user_embedding_vector)
 
 
     print(recommendations)

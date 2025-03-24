@@ -26,19 +26,63 @@ class SimpleProjector(nn.Module):
         return self.fc(x)
 
 class EmbeddingProjector(nn.Module):
-    def __init__(self, input_dim, hidden_dim=256, output_dim=768):
+    def __init__(self, input_dim, hidden_dims=[256, 128], output_dim=768):
         super(EmbeddingProjector, self).__init__()
-        self.fc1 = nn.Linear(input_dim, hidden_dim)
-        self.relu = nn.ReLU()
-        self.fc2 = nn.Linear(hidden_dim, output_dim)
-        self.dropout = nn.Dropout(0.2)
+        
+        layers = []
+        prev_dim = input_dim
+        
+        for hidden_dim in hidden_dims:
+            layers.append(nn.Linear(prev_dim, hidden_dim))
+            layers.append(nn.BatchNorm1d(hidden_dim))
+            layers.append(nn.LeakyReLU(0.2))
+            layers.append(nn.Dropout(0.3))
+            prev_dim = hidden_dim
+        
+        layers.append(nn.Linear(prev_dim, output_dim))
+        
+        self.model = nn.Sequential(*layers)
         
     def forward(self, x):
-        x = self.fc1(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-        x = self.fc2(x)
-        return x
+        return self.model(x)
+
+class EnhancedMovieEmbedding(nn.Module):
+    def __init__(self, input_dim, hidden_dims=[512, 256], output_dim=768, dropout_rate=0.3):
+        super(EnhancedMovieEmbedding, self).__init__()
+        
+        layers = []
+        prev_dim = input_dim
+        
+        for hidden_dim in hidden_dims:
+            layers.append(nn.Linear(prev_dim, hidden_dim))
+            layers.append(nn.LayerNorm(hidden_dim))
+            layers.append(nn.LeakyReLU(0.2))
+            layers.append(nn.Dropout(dropout_rate))
+            prev_dim = hidden_dim
+        
+        layers.append(nn.Linear(prev_dim, output_dim))
+        
+        self.model = nn.Sequential(*layers)
+        
+        # Optional: Add genre-specific embeddings
+        self.use_genre_embeddings = False
+        if self.use_genre_embeddings:
+            self.genre_embeddings = nn.Embedding(20, 64)  # Assuming 20 genres
+            self.genre_projection = nn.Linear(64, output_dim)
+    
+    def forward(self, x, genres=None):
+        # Main content embedding
+        content_embedding = self.model(x)
+        
+        # Add genre information if available
+        if self.use_genre_embeddings and genres is not None:
+            genre_embedding = self.genre_embeddings(genres)
+            genre_embedding = self.genre_projection(genre_embedding)
+            content_embedding = content_embedding + genre_embedding
+        
+        # Normalize output
+        output = nn.functional.normalize(content_embedding, p=2, dim=1)
+        return output
 
 def create_initial_user_embeddings():
     """Create initial user embeddings based only on demographic features"""
@@ -92,7 +136,7 @@ def extract_user_features(users_pd):
     
     # 3. Occupation embedding
     num_occupations = users_pd['Occupation'].max() + 1
-    occupation_embedding_dim = min(10, num_occupations)
+    occupation_embedding_dim = 11
     
     # Create a random embedding matrix for occupations
     np.random.seed(42)  # For reproducibility
@@ -221,6 +265,9 @@ def extract_movie_features(movies_pd):
     return bert_embeddings, tokenizer_info
 
 def train_user_embeddings(iteration, movie_collection):
+    """Train user embeddings with contrastive learning"""
+    print(f"\n=== Training User Embeddings (Iteration {iteration}) ===")
+    print(f"Using movie collection: {movie_collection}")
     
     # Load user data
     users_pd, ratings_pd = DataProcessing.processUserData()
@@ -277,34 +324,48 @@ def train_user_embeddings(iteration, movie_collection):
     input_dim = features.shape[1]
     model = EmbeddingProjector(input_dim=input_dim)
     
+    # Load previous model if available
+    if iteration > 0:
+        prev_model_path = f"models/user_model_iter{iteration-1}.pt"
+        if os.path.exists(prev_model_path):
+            print(f"Loading previous model from {prev_model_path}")
+            model.load_state_dict(torch.load(prev_model_path))
+    
     # Convert features to tensor
     features_tensor = torch.tensor(features, dtype=torch.float32)
     
     # Training parameters
     criterion = nn.MSELoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=0.0001)
     num_epochs = 10
     batch_size = 64
+    
+    # Contrastive learning parameters
+    contrastive_weight = 0.2  # Weight for contrastive loss
+    temperature = 0.1  # Temperature parameter for similarity scaling
     
     # Training loop
     for epoch in range(num_epochs):
         # Shuffle training data
-        np.random.shuffle(train_data)
+        indices = np.random.permutation(len(train_data))
         
         # Process in batches
         total_loss = 0
+        total_rating_loss = 0
+        total_contrastive_loss = 0
         num_batches = 0
         
-        for i in range(0, len(train_data), batch_size):
-            batch = train_data[i:i+batch_size]
+        model.train()
+        for i in range(0, len(indices), batch_size):
+            batch_indices = indices[i:i+batch_size]
             
             # Get user features for this batch
-            user_indices = [item[0] for item in batch]
+            user_indices = [train_data[idx][0] for idx in batch_indices]
             user_features = features_tensor[user_indices]
             
             # Get movie embeddings and ratings
-            movie_embeddings = torch.stack([item[1] for item in batch])
-            ratings = torch.tensor([item[2] for item in batch], dtype=torch.float32)
+            movie_embeddings = torch.stack([train_data[idx][1] for idx in batch_indices])
+            ratings = torch.tensor([train_data[idx][2] for idx in batch_indices], dtype=torch.float32)
             
             # Forward pass
             user_embeddings = model(user_features)
@@ -314,10 +375,18 @@ def train_user_embeddings(iteration, movie_collection):
             similarity = torch.sum(user_embeddings * movie_embeddings, dim=1)
             
             # Scale similarity to rating range (1-5)
-            predicted_ratings = 1 + 4 * (similarity + 1) / 2  # Map from [-1,1] to [1,5]
+            predicted_ratings = 1 + 4 * (similarity + 1) / 2
             
-            # Compute loss
-            loss = criterion(predicted_ratings, ratings)
+            # Rating prediction loss
+            rating_loss = criterion(predicted_ratings, ratings)
+            
+            # Contrastive loss
+            contrastive_loss = compute_contrastive_loss(
+                user_embeddings, user_features, temperature=temperature
+            )
+            
+            # Combined loss
+            loss = rating_loss + contrastive_weight * contrastive_loss
             
             # Backward pass and optimize
             optimizer.zero_grad()
@@ -325,12 +394,18 @@ def train_user_embeddings(iteration, movie_collection):
             optimizer.step()
             
             total_loss += loss.item()
+            total_rating_loss += rating_loss.item()
+            total_contrastive_loss += contrastive_loss.item()
             num_batches += 1
         
         # Print epoch statistics
         avg_loss = total_loss / num_batches
-        print(f"Epoch {epoch+1}/{num_epochs}, Loss: {avg_loss:.4f}")
+        avg_rating_loss = total_rating_loss / num_batches
+        avg_contrastive_loss = total_contrastive_loss / num_batches
+        print(f"Epoch {epoch+1}/{num_epochs}, Loss: {avg_loss:.4f} "
+              f"(Rating: {avg_rating_loss:.4f}, Contrastive: {avg_contrastive_loss:.4f})")
     
+    model.eval()
     # Generate final embeddings for all users
     with torch.no_grad():
         user_embeddings = model(features_tensor)
@@ -478,7 +553,13 @@ def train_movie_embeddings(iteration, user_collection):
     
     # Initialize the model
     input_dim = bert_embeddings.shape[1]
-    model = EmbeddingProjector(input_dim=input_dim)
+    model = EnhancedMovieEmbedding(input_dim=input_dim)
+
+    if iteration > 0:
+        prev_model_path = f"models/movie_model_iter{iteration-1}.pt"
+        if os.path.exists(prev_model_path):
+            print(f"Loading previous model from {prev_model_path}")
+            model.load_state_dict(torch.load(prev_model_path))
     
     # Convert BERT embeddings to tensor
     bert_embeddings_tensor = torch.tensor(bert_embeddings, dtype=torch.float32)
@@ -489,6 +570,9 @@ def train_movie_embeddings(iteration, user_collection):
     num_epochs = 10
     batch_size = 64
     
+    # Create a pool of negative users for contrastive learning
+    all_user_embeddings = torch.stack(list(user_id_to_embedding.values()))
+    model.train()
     # Training loop
     for epoch in range(num_epochs):
         # Shuffle training data
@@ -496,6 +580,8 @@ def train_movie_embeddings(iteration, user_collection):
         
         # Process in batches
         total_loss = 0
+        total_rating_loss = 0
+        total_ranking_loss = 0
         num_batches = 0
         
         for i in range(0, len(train_data), batch_size):
@@ -509,18 +595,20 @@ def train_movie_embeddings(iteration, user_collection):
             user_embeddings = torch.stack([item[1] for item in batch])
             ratings = torch.tensor([item[2] for item in batch], dtype=torch.float32)
             
+            # Sample negative users (who didn't rate these movies)
+            negative_user_embeddings = sample_negative_users(user_embeddings, all_user_embeddings, k=5)
+            
             # Forward pass
             movie_embeddings = model(movie_features)
-            movie_embeddings = nn.functional.normalize(movie_embeddings, p=2, dim=1)
             
-            # Compute similarity (dot product)
-            similarity = torch.sum(movie_embeddings * user_embeddings, dim=1)
-            
-            # Scale similarity to rating range (1-5)
-            predicted_ratings = 1 + 4 * (similarity + 1) / 2 
-            
-            # Compute loss
-            loss = criterion(predicted_ratings, ratings)
+            # Compute hybrid loss
+            loss, rating_loss, ranking_loss, _ = hybrid_movie_embedding_loss(
+                movie_embeddings, 
+                user_embeddings, 
+                ratings,
+                negative_user_embeddings,
+                alpha=0.4  # Adjust based on your priorities
+            )
             
             # Backward pass and optimize
             optimizer.zero_grad()
@@ -528,12 +616,18 @@ def train_movie_embeddings(iteration, user_collection):
             optimizer.step()
             
             total_loss += loss.item()
+            total_rating_loss += rating_loss.item()
+            total_ranking_loss += ranking_loss.item()
             num_batches += 1
         
         # Print epoch statistics
         avg_loss = total_loss / num_batches
-        print(f"Epoch {epoch+1}/{num_epochs}, Loss: {avg_loss:.4f}")
+        avg_rating_loss = total_rating_loss / num_batches
+        avg_ranking_loss = total_ranking_loss / num_batches
+        print(f"Epoch {epoch+1}/{num_epochs}, Loss: {avg_loss:.4f} "
+              f"(Rating: {avg_rating_loss:.4f}, Ranking: {avg_ranking_loss:.4f})")
     
+    model.eval()
     # Generate final embeddings for all movies
     with torch.no_grad():
         movie_embeddings = model(bert_embeddings_tensor)
@@ -651,9 +745,143 @@ def copy_final_models(iteration):
         print(f"Error copying final models: {e}")
         return False
 
+def compute_contrastive_loss(embeddings, features, temperature=0.1):
+    """
+    Compute contrastive loss to ensure different users have different embeddings
+    
+    Args:
+        embeddings: Normalized user embeddings (batch_size x embedding_dim)
+        features: User demographic features (batch_size x feature_dim)
+        temperature: Temperature parameter for similarity scaling
+    
+    Returns:
+        Contrastive loss value
+    """
+    batch_size = embeddings.shape[0]
+    
+    # Compute pairwise embedding similarities
+    # sim(i,j) = e_i^T e_j / temperature
+    similarities = torch.mm(embeddings, embeddings.t()) / temperature
+    
+    # Compute feature distances (demographic differences)
+    # We want users with different demographics to have different embeddings
+    feature_distances = torch.cdist(features, features, p=2)
+    
+    # Normalize feature distances to [0, 1]
+    if feature_distances.max() > 0:
+        feature_distances = feature_distances / feature_distances.max()
+    
+    # Create positive and negative masks
+    # Positive pairs: Users with similar demographics (small feature distance)
+    # Negative pairs: Users with different demographics (large feature distance)
+    threshold = 0.3  # Threshold for considering demographics similar/different
+    pos_mask = (feature_distances < threshold) & (torch.eye(batch_size, device=embeddings.device) == 0)
+    neg_mask = (feature_distances > threshold)
+    
+    # For each user, we want:
+    # 1. Similar embeddings for demographically similar users (positive pairs)
+    # 2. Different embeddings for demographically different users (negative pairs)
+    
+    # Positive loss: -log(exp(sim(i,j)) / sum_k(exp(sim(i,k))))
+    # This encourages similar embeddings for positive pairs
+    pos_loss = 0
+    if pos_mask.sum() > 0:
+        # For numerical stability, subtract max similarity
+        logits_max, _ = torch.max(similarities, dim=1, keepdim=True)
+        logits = similarities - logits_max.detach()
+        
+        # Compute log_prob for positive pairs
+        exp_logits = torch.exp(logits)
+        log_prob = logits - torch.log(exp_logits.sum(1, keepdim=True))
+        
+        # Mean over positive pairs
+        pos_loss = -(pos_mask * log_prob).sum() / pos_mask.sum()
+    
+    # Negative loss: Push apart embeddings for negative pairs
+    neg_loss = 0
+    if neg_mask.sum() > 0:
+        # We want to minimize similarity for negative pairs
+        neg_loss = (neg_mask * torch.exp(similarities)).sum() / neg_mask.sum()
+    
+    # Combined loss
+    loss = pos_loss + neg_loss
+    
+    return loss
+
+def hybrid_movie_embedding_loss(movie_embeddings, user_embeddings, ratings, 
+                               negative_user_embeddings=None, alpha=0.4, beta=0.2):
+    """
+    Hybrid loss function optimized for movie embeddings
+    
+    Args:
+        movie_embeddings: Movie embeddings being trained
+        user_embeddings: User embeddings (fixed) who rated these movies
+        ratings: Actual ratings given by users
+        negative_user_embeddings: Users who didn't rate these movies (for contrast)
+        alpha: Weight for the ranking component
+        beta: Weight for the content similarity component
+    
+    Returns:
+        Combined loss, rating loss, ranking loss, and content loss
+    """
+    # Normalize embeddings
+    movie_norm = nn.functional.normalize(movie_embeddings, p=2, dim=1)
+    user_norm = nn.functional.normalize(user_embeddings, p=2, dim=1)
+    
+    # 1. Rating prediction component (MSE)
+    similarity = torch.sum(movie_norm * user_norm, dim=1)
+    predicted_ratings = 1 + 4 * (similarity + 1) / 2  # Scale to 1-5
+    rating_loss = nn.MSELoss()(predicted_ratings, ratings)
+    
+    # 2. Ranking component (if negative samples provided)
+    ranking_loss = torch.tensor(0.0, device=movie_embeddings.device)
+    if negative_user_embeddings is not None:
+        neg_norm = nn.functional.normalize(negative_user_embeddings, p=2, dim=1)
+        
+        # For each movie, we want users who rated it to be more similar than those who didn't
+        pos_scores = similarity
+        neg_scores = torch.matmul(movie_norm, neg_norm.t())
+        
+        # BPR-inspired loss: maximize difference between positive and negative scores
+        diff = pos_scores.unsqueeze(1) - neg_scores
+        ranking_loss = -torch.mean(torch.log(torch.sigmoid(diff)))
+    
+    # 3. Content similarity component (optional)
+    # This encourages similar movies to have similar embeddings
+    content_loss = torch.tensor(0.0, device=movie_embeddings.device)
+    
+    # Combined loss
+    total_loss = rating_loss + alpha * ranking_loss + beta * content_loss
+    
+    return total_loss, rating_loss, ranking_loss, content_loss
+
+def sample_negative_users(positive_users, all_users, k=5):
+    """
+    Sample users who didn't rate the movies in the current batch
+    
+    Args:
+        positive_users: User embeddings who rated the movies
+        all_users: All available user embeddings
+        k: Number of negative samples per positive user
+    
+    Returns:
+        Tensor of negative user embeddings
+    """
+    batch_size = positive_users.shape[0]
+    all_users_count = all_users.shape[0]
+    
+    # For simplicity, just randomly sample from all users
+    # In a production system, you'd want to ensure these users didn't actually rate the movies
+    negative_indices = torch.randint(0, all_users_count, (batch_size, k), device=positive_users.device)
+    
+    # Reshape to (batch_size * k, embedding_dim)
+    negative_users = all_users[negative_indices.flatten()]
+    
+    return negative_users
+
 def main():
     parser = argparse.ArgumentParser(description='Train recommendation system with iterative refinement')
-    parser.add_argument('--iterations', type=int, default=3, help='Number of refinement iterations')
+    parser.add_argument('--iterations', type=int, default=20, help='Number of refinement iterations')
     args = parser.parse_args()
     
     # Create models directory

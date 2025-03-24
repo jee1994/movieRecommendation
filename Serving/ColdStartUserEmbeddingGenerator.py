@@ -18,10 +18,10 @@ def generate_newuser_embeddings(model_path, user_data):
      
     user_data = pd.DataFrame([user_dict])
      
-    user_embedding_features = featureExtract(user_data)
+    user_embedding_features = featureExtract(user_data, fit_scaler=False)
+    print(f"extract festures {user_embedding_features}")
 
     input_dim = user_embedding_features.shape[1]
-    print(f"input_dim: {input_dim}")
     model = EmbeddingProjector(input_dim=input_dim)
     model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu')))
     model.eval()
