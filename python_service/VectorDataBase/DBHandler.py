@@ -6,6 +6,7 @@ import Embedding
 
 class MilvusHandler:
     collection = None
+
     def __init__(self, host=None, port=None, collection_name=None, dim=None, dataType=None, needToReset=False):
         # Get connection details from environment variables or use defaults
         self.host = host or os.environ.get("MILVUS_HOST", "localhost")
@@ -93,6 +94,7 @@ class MilvusHandler:
         
         # Insert the data into Milvus
         insert_result = self.collection.insert(entities)
+        self.collection.flush()
         print(f"Inserted {len(movie_ids)} movies into Milvus")
         return insert_result
     
@@ -113,15 +115,18 @@ class MilvusHandler:
         
         # Insert the data into Milvus
         insert_result = self.collection.insert(entities)
+        self.collection.flush()
         print(f"Inserted {len(user_ids)} users into Milvus")
         return insert_result
     
-    def create_index(self, index_type="IVF_FLAT", metric_type="L2", nlist=100):
+    def create_index(self, index_type="IVF_FLAT", metric_type="COSINE", nlist=100):
         """Create an index for fast similarity search"""
-        print("#### create index ####")
+        if hasattr(self, 'collection') and self.collection is not None:
+            self.collection.drop_index()
+            print("Dropped existing index")
         index_params = {"index_type": index_type, "metric_type": metric_type, "params": {"nlist": nlist}}
         self.collection.create_index(field_name="embedding", index_params=index_params)
-        print(f"Created {index_type} index on embeddings")
+        print(f"#### create index {self.collection.indexes} ####")
         
     def load_collection(self):
         """Load collection into memory for search"""
@@ -130,14 +135,15 @@ class MilvusHandler:
         
     def search(self, query_embedding, top_k=10):
         """Search for similar movies"""
-        search_params = {"metric_type": "L2", "params": {"nprobe": 10}}
+        search_params = {"metric_type": "COSINE", "params": {"nprobe": 10}}
         
         # Convert query to list format if it's a tensor
         if hasattr(query_embedding, 'detach'):
-            query_list = query_embedding.detach().cpu().numpy().tolist()
+            query_list = query_embedding.float().detach().cpu().numpy().tolist()
         else:
             query_list = query_embedding
-            
+
+        print(f"search_params: {self.collection.indexes}")
         results = self.collection.search(
             data=[query_list], 
             anns_field="embedding", 
@@ -182,3 +188,23 @@ class MilvusHandler:
     def get_all_user_entities(self, limit=10000):
         """Get all user entities from collection"""
         return self.get_entities(expr="UserID >= 0", limit=limit)
+    
+
+    @classmethod
+    def drop_all_collections(cls):
+        """Drop all collections in the Milvus database"""
+        # Connect to Milvus
+        connections.connect("default", host="localhost", port=19530)
+        
+        # Get list of all collections
+        collection_names = utility.list_collections()
+        
+        # Drop each collection
+        for collection_name in collection_names:
+            print(f"Dropping collection: {collection_name}")
+            utility.drop_collection(collection_name)
+        
+        print(f"Dropped {len(collection_names)} collections")
+        
+        # Disconnect
+        connections.disconnect("default")

@@ -1,0 +1,14 @@
+
+services:
+  embedding-service:
+    build: .
+    ports:
+      - "50052:50052"
+    volumes:
+      - ./models:/app/models
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1  # For better logging
+
+volumes:
+  models:

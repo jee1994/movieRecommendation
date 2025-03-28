@@ -7,7 +7,7 @@ def processMovieData():
     spark = SparkSession.builder.appName("MovieRec").getOrCreate()
 
     # Load the movies and ratings data (MovieLens-style, delimited by "::")
-    movies_df = spark.read.csv("data/movies_tream.dat", sep="::", inferSchema=True).toDF("MovieID", "Title", "Genres")
+    movies_df = spark.read.csv("data/movies.dat", sep="::", inferSchema=True).toDF("MovieID", "Title", "Genres")
 
     return movies_df
 

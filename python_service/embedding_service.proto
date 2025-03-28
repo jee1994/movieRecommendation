@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package embedding;
+
+// Service definition
+service EmbeddingService {
+  rpc GenerateUserEmbedding (UserRequest) returns (EmbeddingResponse) {}
+}
+
+// User data message
+message UserRequest {
+  int32 user_id = 1;
+  string gender = 2;
+  int32 age = 3;
+  int32 occupation = 4;
+  string zipcode = 5;
+}
+
+// Embedding response message
+message EmbeddingResponse {
+  repeated float embedding = 1;
+}
