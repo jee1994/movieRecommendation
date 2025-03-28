@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 import sys
 import os
+import json
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from DataProcessing import DataProcessing
@@ -51,3 +52,32 @@ class User:
             'Occupation': self.user_occupation,
             'Zipcode': self.user_zipcode
         }
+    
+if __name__ == "__main__":
+    if len(sys.argv) != 4:
+        print("Usage: python ColdStartUserEmbeddingGenerator.py user_data.json model_path output_file.json")
+        sys.exit(1)
+        
+    user_data_file = sys.argv[1]
+    model_path = sys.argv[2]
+    output_file = sys.argv[3]
+    
+    # Load user data
+    with open(user_data_file, 'r') as f:
+        user_data = json.load(f)
+    
+    # Create user object
+    user = User(
+        user_id=user_data["user_id"],
+        user_gender=user_data["user_gender"],
+        user_age=user_data["user_age"],
+        user_occupation=user_data["user_occupation"],
+        user_zipcode=user_data["user_zipcode"]
+    )
+    
+    # Generate embedding
+    embedding = generate_newuser_embeddings(model_path, user)
+    
+    # Save embedding
+    with open(output_file, 'w') as f:
+        json.dump(embedding.tolist(), f)

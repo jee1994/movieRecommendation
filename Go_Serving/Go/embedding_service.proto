@@ -1,0 +1,19 @@
+syntax = "proto3";
+package embedding;
+option go_package = "recommendation-service/proto/embedding";
+
+service EmbeddingService {
+  rpc GenerateUserEmbedding (UserRequest) returns (EmbeddingResponse) {}
+}
+
+message UserRequest {
+  int32 user_id = 1;
+  string gender = 2;
+  int32 age = 3;
+  int32 occupation = 4;
+  string zipcode = 5;
+}
+
+message EmbeddingResponse {
+  repeated float embedding = 1;
+}

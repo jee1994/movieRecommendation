@@ -1,0 +1,12 @@
+grpcio==1.51.0
+grpcio-tools==1.51.0
+protobuf==4.21.12
+torch==2.0.0
+numpy==1.24.3
+pymilvus
+numpy
+torch
+pandas
+pyspark==3.4.1
+transformers==4.26.0
+scikit-learn
